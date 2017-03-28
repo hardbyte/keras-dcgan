@@ -19,6 +19,9 @@ from PIL import Image
 import argparse
 import math
 
+# input image dimensions
+img_rows, img_cols = 28, 28
+
 
 def generator_model():
     model = Sequential()
@@ -80,8 +83,7 @@ def combine_images(generated_images):
 
 def train(batch_size, epochs, save_epoch_weights, path=''):
     (x_train, y_train), (x_test, y_test) = mnist.load_data()
-    # input image dimensions
-    img_rows, img_cols = 28, 28
+
     # Reshape
     if K.image_data_format() == 'channels_first':
         print("Backend prefers channels first")
@@ -130,6 +132,7 @@ def train(batch_size, epochs, save_epoch_weights, path=''):
                 noise[i, :] = np.random.uniform(-1, 1, 100)
             discriminator.trainable = False
 
+            # Compute the generator's loss on if it could fool the discriminator
             g_loss = discriminator_on_generator.train_on_batch(
                 noise, [1] * batch_size)
             discriminator.trainable = True
@@ -149,7 +152,13 @@ def generate(BATCH_SIZE, nice=False):
     generator.compile(loss='binary_crossentropy', optimizer="SGD")
     generator.load_weights('generator.h5')
     if nice:
-        discriminator = discriminator_model()
+
+        if K.image_data_format() == 'channels_first':
+            input_shape = (1, img_rows, img_cols)
+        else:
+            input_shape = (img_rows, img_cols, 1)
+
+        discriminator = discriminator_model(input_shape)
         discriminator.compile(loss='binary_crossentropy', optimizer="SGD")
         discriminator.load_weights('discriminator.h5')
         noise = np.zeros((BATCH_SIZE*20, 100))
@@ -161,11 +170,13 @@ def generate(BATCH_SIZE, nice=False):
         index.resize((BATCH_SIZE*20, 1))
         pre_with_index = list(np.append(d_pret, index, axis=1))
         pre_with_index.sort(key=lambda x: x[0], reverse=True)
-        nice_images = np.zeros((BATCH_SIZE, 1) +
-                               (generated_images.shape[2:]), dtype=np.float32)
+        nice_images = np.zeros((BATCH_SIZE,) + input_shape, dtype=np.float32)
         for i in range(int(BATCH_SIZE)):
             idx = int(pre_with_index[i][1])
-            nice_images[i, 0, :, :] = generated_images[idx, 0, :, :]
+            if K.image_data_format() == 'channels_first':
+                nice_images[i, :, :] = generated_images[idx, 0, :, :].reshape(input_shape)
+            else:
+                nice_images[i, :, :] = generated_images[idx, :, :, 0].reshape(input_shape)
         image = combine_images(nice_images)
     else:
         noise = np.zeros((BATCH_SIZE, 100))
@@ -182,14 +193,14 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--mode", type=str)
     parser.add_argument("--path", type=str, help="Path to save generated images")
-    parser.add_argument("--batch-size", type=int, default=128)
+    parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--save-weights", dest="save_epochs", action='store_true',
                         help="Save weights for each epoch")
     parser.add_argument("--nice", dest="nice", action="store_true")
     parser.set_defaults(nice=False, save_epochs=False)
-    args = parser.parse_args()
-    return args
+    return parser.parse_args()
+
 
 if __name__ == "__main__":
     args = get_args()
