@@ -1,17 +1,28 @@
 """
 Based on https://github.com/jacobgil/keras-dcgan
 
-"""
+Changes:
+- Adds a third agent which classifies generated digits
+- Generator given an input class as well as random IV
+- Gave the generator some more neurons
 
-from keras.models import Sequential
-from keras.layers import Dense
+Agents:
+
+- A generator which takes a random signal + a digit class
+- A discriminator which is given images and has to decide if they are fake or not
+- A classifier which is given generated images and classifies them with a digit class
+
+"""
+import keras
+from keras.models import Model, Sequential
+from keras.layers import Dense, Input, Dropout
 from keras.layers import Reshape
 from keras.layers.core import Activation
 from keras.layers.normalization import BatchNormalization
 from keras.layers.convolutional import UpSampling2D, Conv2D
 from keras.layers.convolutional import MaxPooling2D
 from keras.layers.core import Flatten
-from keras.optimizers import SGD
+from keras.optimizers import SGD, Adam
 from keras.datasets import mnist
 from keras import backend as K
 import numpy as np
@@ -20,21 +31,49 @@ import argparse
 import math
 
 # input image dimensions
+from keras.utils import np_utils
+
 img_rows, img_cols = 28, 28
 
 
 def generator_model():
+    iv = Input(shape=(100,))
+    class_input = Input(shape=(10,), name='class_input')
+
+    # embedding layer to encode the random IV sequence
+    iv_embedding = Dense(units=1024, activation='tanh')(iv)
+
+    x = keras.layers.concatenate([iv_embedding, class_input])
+
+    x = Dense(128*7*7, activation='relu')(x)
+    x = Dense(128*7*7, activation='relu')(x)
+
+    x = BatchNormalization()(x)
+    x = Activation('tanh')(x)
+    x = Reshape((7, 7, 128), input_shape=(128*7*7,))(x)
+    x = UpSampling2D(size=(2, 2))(x)
+    x = Conv2D(64, kernel_size=5, padding='same', activation='tanh')(x)
+    x = UpSampling2D(size=(2, 2))(x)
+    out = Conv2D(1, kernel_size=5, padding='same', activation='tanh')(x)
+    model = Model(inputs=[iv, class_input], outputs=out)
+
+    return model
+
+
+def classifier_model(input_shape):
     model = Sequential()
-    model.add(Dense(units=1024, input_dim=100))
-    model.add(Activation('tanh'))
-    model.add(Dense(128*7*7))
-    model.add(BatchNormalization())
-    model.add(Activation('tanh'))
-    model.add(Reshape((7, 7, 128), input_shape=(128*7*7,)))
-    model.add(UpSampling2D(size=(2, 2)))
-    model.add(Conv2D(64, kernel_size=5, padding='same', activation='tanh'))
-    model.add(UpSampling2D(size=(2, 2)))
-    model.add(Conv2D(1, kernel_size=5, padding='same', activation='tanh'))
+    model.add(Conv2D(32,
+                     kernel_size=3,
+                     activation='relu',
+                     input_shape=input_shape))
+    model.add(Conv2D(32, kernel_size=3, activation='relu'))
+    model.add(Conv2D(32, kernel_size=5, activation='relu'))
+    model.add(MaxPooling2D(pool_size=(2, 2)))
+    model.add(Dropout(0.25))
+    model.add(Flatten())
+    model.add(Dense(128, activation='relu'))
+    model.add(Dropout(0.5))
+    model.add(Dense(10, activation='softmax'))
     return model
 
 
@@ -59,6 +98,18 @@ def generator_containing_discriminator(generator, discriminator):
     model.add(generator)
     discriminator.trainable = False
     model.add(discriminator)
+    return model
+
+
+def generator_containing_classifier(generator, classifier):
+    return combine_model(classifier, generator)
+
+
+def combine_model(uses_generated, generator):
+    model = Sequential()
+    model.add(generator)
+    uses_generated.trainable = False
+    model.add(uses_generated)
     return model
 
 
@@ -99,45 +150,85 @@ def train(batch_size, epochs, save_epoch_weights, path=''):
     x_train = (x_train.astype(np.float32) - 127.5)/127.5
 
     discriminator = discriminator_model(input_shape)
+    classifier = classifier_model(input_shape)
+
     generator = generator_model()
-    discriminator_on_generator = \
-        generator_containing_discriminator(generator, discriminator)
-    d_optim = SGD(lr=0.0005, momentum=0.9, nesterov=True)
-    g_optim = SGD(lr=0.0005, momentum=0.9, nesterov=True)
-    generator.compile(loss='binary_crossentropy', optimizer="SGD")
-    discriminator_on_generator.compile(
-        loss='binary_crossentropy', optimizer=g_optim)
+
+    discriminator_on_generator = generator_containing_discriminator(generator, discriminator)
+    classifier_on_generator = generator_containing_classifier(generator, classifier)
+
+    #d_optim = SGD(lr=0.0005, momentum=0.9, nesterov=True)
+    #g_optim = SGD(lr=0.0005, momentum=0.9, nesterov=True)
+
+    g_optim = Adam(lr=0.0001)
+    g_c_optim = Adam(lr=0.0001)
+    g_d_optim = Adam(lr=0.0001)
+    c_optim = Adam()
+    d_optim = Adam(lr=0.0001)
+    generator.compile(loss='binary_crossentropy', optimizer=g_optim)
+    discriminator_on_generator.compile(loss='binary_crossentropy', optimizer=g_d_optim)
+    classifier_on_generator.compile(loss='categorical_crossentropy', optimizer=g_c_optim)
+
     discriminator.trainable = True
     discriminator.compile(loss='binary_crossentropy', optimizer=d_optim)
-    noise = np.zeros((batch_size, 100))
-    print("{} batches per epoch".format(x_train.shape[0] // batch_size))
 
+    classifier.trainable = True
+    classifier.compile(loss='categorical_crossentropy', optimizer=c_optim)
+
+    noise = np.zeros((batch_size, 100))
+
+    print("{} batches per epoch".format(x_train.shape[0] // batch_size))
     for epoch in range(epochs):
         for index in range(int(x_train.shape[0]/batch_size)):
             for i in range(batch_size):
                 noise[i, :] = np.random.uniform(-1, 1, 100)
             image_batch = x_train[index * batch_size:(index + 1) * batch_size]
-            generated_images = generator.predict(noise, verbose=0)
+
+            # sample classes here and get the generator to make fake images
+            classes = np_utils.to_categorical(np.random.randint(0, 10, batch_size), 10)
+            generated_images = generator.predict([noise, classes], verbose=0)
+
             if index % 50 == 0:
                 image = combine_images(generated_images[:25])
                 image = image*127.5+127.5
                 filename = '{}/{}_{}.png'.format(path, epoch, index)
                 Image.fromarray(image.astype(np.uint8)).save(filename)
 
+            # Compute the classifier's loss on the generated images
+            # The classifier doesn't see the raw images.
+            X = generated_images
+            y = classes
+            c_loss = classifier.train_on_batch(X, y)
+            classifier.trainable = False
+
             # Compute the discriminator's loss using the generated images:
             X = np.concatenate((image_batch, generated_images))
             y = [1] * batch_size + [0] * batch_size
             d_loss = discriminator.train_on_batch(X, y)
-            for i in range(batch_size):
-                noise[i, :] = np.random.uniform(-1, 1, 100)
             discriminator.trainable = False
 
+            # Update random vector
+            for i in range(batch_size):
+                noise[i, :] = np.random.uniform(-1, 1, 100)
+
+
+            # Compute the generator's loss on if it could correctly convince the classifier
+            g_c_loss = classifier_on_generator.train_on_batch(
+                [noise, classes],
+                classes
+            )
+
             # Compute the generator's loss on if it could fool the discriminator
-            g_loss = discriminator_on_generator.train_on_batch(
-                noise, [1] * batch_size)
+            g_d_loss = discriminator_on_generator.train_on_batch(
+                [noise, classes],
+                [1] * batch_size)
+
+            g_loss = g_d_loss + g_c_loss
             discriminator.trainable = True
             if index % 10 == 0:
-                print("Epoch {} batch:{:3} d_loss: {:8.6f} g_loss: {:8.6f}".format(epoch, index, d_loss, g_loss))
+                print("Epoch {} batch:{:3} d_loss: {:8.6f} c_loss: {:8.6f} g_loss: {:8.6f}".format(
+                    epoch, index, d_loss, c_loss, g_loss)
+                )
 
         if save_epoch_weights:
             generator.save_weights('generator_{}.h5'.format(epoch), True)

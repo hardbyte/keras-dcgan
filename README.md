@@ -1,11 +1,19 @@
-## KERAS-DCGAN ##
+# KERAS-DCGAN
 
-Implementation of http://arxiv.org/abs/1511.06434 with the (awesome) [keras](https://github.com/fchollet/keras) library, for generating artificial images with deep learning.
+Example implementation of adversarial agents with keras. 
 
+## Example 1 dcgan 
 
+For generating artificial images with deep learning.
 
-This trains two adversarial deep learning models on real images, in order to produce artificial images that look real.
+This trains two adversarial deep learning models on real images, in order to
+produce artificial images that look real.
 
+## Agents:
+
+- A **generator** which takes a random signal + a digit class
+- A **discriminator** which is given images and has to decide if they are fake or not
+- A **classifier** which is given generated images and classifies them with a digit class
 
 
 The generator model tries to produce images that look real and get a high score from the discriminator.
@@ -39,36 +47,29 @@ $ python dcgan.py --mode generate --batch_size 128
 ```
 
 
-
-
 ## Result
-
 
 
 **generated images :** 
 
 
-
-![generated_image.png](./assets/generated_image.png)
-
-
-
-
-
-![nice_generated_image.png](./assets/nice_generated_image.png)
-
-
-
+![generated_image.png](./assets/generated_image.png) ![nice_generated_image.png](./assets/nice_generated_image.png)
 
 
 **train process :**
 
 
-
 ![training_process.gif](./assets/training_process.gif)
 
 
+## Acknowledgments
+
+Based on [jacobgil](https://github.com/jacobgil/keras-dcgan)'s implementation of 
+[Unsupervised Representation Learning with Deep Convolutional Generative Adversarial Networks](http://arxiv.org/abs/1511.06434).
+
+High level changes from that repository:
+
+- Adds a third agent which classifies generated digits
+- Generator given an input class as well as random IV
 
 
-
----
