@@ -238,7 +238,7 @@ def train(batch_size, epochs, save_epoch_weights, path=''):
         discriminator.save_weights('discriminator.h5'.format(epoch), True)
 
 
-def generate(BATCH_SIZE, nice=False):
+def generate(batch_size, nice=False):
     generator = generator_model()
     generator.compile(loss='binary_crossentropy', optimizer="SGD")
     generator.load_weights('generator.h5')
@@ -252,17 +252,19 @@ def generate(BATCH_SIZE, nice=False):
         discriminator = discriminator_model(input_shape)
         discriminator.compile(loss='binary_crossentropy', optimizer="SGD")
         discriminator.load_weights('discriminator.h5')
-        noise = np.zeros((BATCH_SIZE*20, 100))
-        for i in range(BATCH_SIZE*20):
+        noise = np.zeros((batch_size * 20, 100))
+        desired_digit = np.zeros((batch_size * 20, 10), dtype=int)
+        for i in range(batch_size*20):
             noise[i, :] = np.random.uniform(-1, 1, 100)
-        generated_images = generator.predict(noise, verbose=1)
+            desired_digit[i, i % 10] = 1
+        generated_images = generator.predict([noise, desired_digit], verbose=1)
         d_pret = discriminator.predict(generated_images, verbose=1)
-        index = np.arange(0, BATCH_SIZE*20)
-        index.resize((BATCH_SIZE*20, 1))
+        index = np.arange(0, batch_size * 20)
+        index.resize((batch_size * 20, 1))
         pre_with_index = list(np.append(d_pret, index, axis=1))
         pre_with_index.sort(key=lambda x: x[0], reverse=True)
-        nice_images = np.zeros((BATCH_SIZE,) + input_shape, dtype=np.float32)
-        for i in range(int(BATCH_SIZE)):
+        nice_images = np.zeros((batch_size,) + input_shape, dtype=np.float32)
+        for i in range(int(batch_size)):
             idx = int(pre_with_index[i][1])
             if K.image_data_format() == 'channels_first':
                 nice_images[i, :, :] = generated_images[idx, 0, :, :].reshape(input_shape)
@@ -270,10 +272,12 @@ def generate(BATCH_SIZE, nice=False):
                 nice_images[i, :, :] = generated_images[idx, :, :, 0].reshape(input_shape)
         image = combine_images(nice_images)
     else:
-        noise = np.zeros((BATCH_SIZE, 100))
-        for i in range(BATCH_SIZE):
+        noise = np.zeros((batch_size, 100))
+        desired_digit = np.zeros((batch_size, 10), dtype=int)
+        for i in range(batch_size):
             noise[i, :] = np.random.uniform(-1, 1, 100)
-        generated_images = generator.predict(noise, verbose=1)
+            desired_digit[i, i % 10] = 1
+        generated_images = generator.predict([noise, desired_digit], verbose=1)
         image = combine_images(generated_images)
     image = image*127.5+127.5
     Image.fromarray(image.astype(np.uint8)).save(
@@ -300,4 +304,4 @@ if __name__ == "__main__":
         path = os.path.abspath(args.path)
         train(batch_size=args.batch_size, epochs=args.epochs, save_epoch_weights=args.save_epochs, path=path)
     elif args.mode == "generate":
-        generate(BATCH_SIZE=args.batch_size, nice=args.nice)
+        generate(batch_size=args.batch_size, nice=args.nice)
