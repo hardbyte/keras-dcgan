@@ -1,27 +1,30 @@
 # KERAS-DCGAN
 
-Example implementation of adversarial agents with keras. 
+Example implementations of adversarial agents with keras.
 
-## Example 1 dcgan 
+## Example 1 - generating artificial images
 
-For generating artificial images with deep learning.
+In this example we learn:
+- how to generate believable looking MNIST digit images
+- how to classify MNIST digits
 
-This trains two adversarial deep learning models on real images, in order to
-produce artificial images that look real.
+The agents that learn this don't see the raw MNIST image data at all! Rather 
+knowledge is transferred from an adversarial discriminator which is trying to
+spot the difference between _fake_ generated images and the real thing.
+
+
+We train three adversarial deep learning models - one for each agent.
 
 ## Agents:
 
-- A **generator** which takes a random signal + a digit class
-- A **discriminator** which is given images and has to decide if they are fake or not
-- A **classifier** which is given generated images and classifies them with a digit class
-
-
-The generator model tries to produce images that look real and get a high score from the discriminator.
-
-
-
-The discriminator model tries to tell apart between real images and artificial images from the generator.
-
+- A **generator** which takes a random signal + a digit class. The generator model 
+  tries to produce images that look real, get correctly classified by the classifier,
+  and get a high score from the discriminator.
+- A **discriminator** which is given images and has to decide if they are fake or not. 
+  The discriminator model is the only thing exposed to the real MNIST training images.
+  Ideally after a long time the discriminator's loss rises.
+- A **classifier** which is given _generated_ images and learns a very standard MNIST
+  multiclass classification model that outputs the digit class of the image (0 - 9).
 
 
 ## Usage
@@ -39,11 +42,11 @@ $ python dcgan.py --mode train --path ~/generated-images --batch_size 256
 **Image generation:**
 
 ```
-python dcgan.py --mode generate --batch_size <batch_size>
+python dcgan.py --mode generate --batch-size <batch_size>
 
-$ python dcgan.py --mode generate --batch_size 64 --nice` : top 5% images according to discriminator
+$ python dcgan.py --mode generate --batch-size 64 --nice` : top 5% images according to discriminator
 
-$ python dcgan.py --mode generate --batch_size 128
+$ python dcgan.py --mode generate --batch-size 128
 ```
 
 
@@ -72,4 +75,4 @@ High level changes from that repository:
 - Adds a third agent which classifies generated digits
 - Generator given an input class as well as random IV
 
-
+## Example 2 - Adversarial Cryptography
