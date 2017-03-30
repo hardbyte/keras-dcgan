@@ -76,3 +76,30 @@ High level changes from that repository:
 - Generator given an input class as well as random IV
 
 ## Example 2 - Adversarial Cryptography
+
+An implementation of
+[Learning to Protect Communications with Adversarial Neural Cryptography](https://arxiv.org/abs/1610.06918)
+using keras.
+
+Essentially three parties are trying to carry out a very classic cryptography problem. *Alice* and *Bob* have a
+shared key and which to communicate a message *P* without *Eve* being able to reconstruct the message.
+
+![ex2-layout.png](./assets/ex2-layout.png)
+Diagram from: [nlml.github.io](https://nlml.github.io/neural-networks/adversarial-neural-cryptography/)
+
+### Model:
+
+You can render a nice viz of the models' nodes using Tensorboard:
+
+![tensorboard-nodes.png](./assets/tensorboard-nodes.png)
+
+### Training:
+
+
+![tensorboard-alice-loss.png](./assets/tensorboard-alice-loss.png)
+
+
+### Notes:
+
+I wasn't sure exactly how do do the custom loss function for alice using Keras.
+
