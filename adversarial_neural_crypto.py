@@ -1,12 +1,12 @@
 """
 
-An attempt at implementing 
+An attempt at implementing
 [Learning to Protect Communications with Adversarial Neural Cryptography](https://arxiv.org/abs/1610.06918)
 using keras.
 
 Inspiration also from https://nlml.github.io/neural-networks/adversarial-neural-cryptography/
 
-Alice 
+Alice
     Inputs: a plaintext message P, and a random key K
     Outputs: a ciphertext C
 
@@ -45,7 +45,6 @@ epochs = 100
 batch_size = 1024
 learning_rate = 0.0008
 extra_eve_training_batches = 3
-
 
 callback = keras.callbacks.TensorBoard(log_dir='./logs', histogram_freq=0, write_graph=False, write_images=False)
 
@@ -164,20 +163,19 @@ def gan_models():
 
 def train(batch_size, epochs, path=''):
     """
-    Goal is to train "Alice + Bob" for one minibatch then "Eve" for 2 minibatches. 
+    Goal is to train "Alice + Bob" for one minibatch then "Eve" for 2 minibatches.
     """
 
     alice_and_bob_gan, eve_gan = gan_models()
-
 
     def alice_eve_loss(y_true, y_pred):
         """
         Alice's second loss component - seeing if it could
         *prevent* Eve from learning the correct message.
-        
+
         If y_pred is close to y_true, or close to the opposite of y_true
         then the loss should be high.
-        
+
         The optimal loss is half the bits match.
         """
 
@@ -185,7 +183,7 @@ def train(batch_size, epochs, path=''):
 
     def update_alice_and_bob_gan(last_eve_loss=1):
         def alice_loss(y_true, y_pred):
-            return last_eve_loss + mean_absolute_error(y_true, y_pred)
+            return 1 + mean_absolute_error(y_true, y_pred) - last_eve_loss
 
         alice_and_bob_gan.compile(loss=alice_loss, optimizer=Adam(lr=learning_rate))
 
@@ -219,7 +217,7 @@ def train(batch_size, epochs, path=''):
             alice_losses.append((time.time(), a_loss))
 
             # Not too much point training eve until alice and bob are communicating
-            if a_loss < 1 + 0.1:
+            if a_loss < 0.1:
                 generated_coms = alice.predict([x_train_keys, x_train_msgs])
 
                 # Train eve by trying to reconstruct the comms
@@ -258,8 +256,8 @@ def train(batch_size, epochs, path=''):
             else:
                 print(a_loss)
 
-        #x_test_keys, x_test_msgs = gen_data(100)
-        #print("AB communication loss: ", alice_and_bob_gan.evaluate([x_test_keys, x_test_msgs], x_test_msgs, verbose=0))
+        # x_test_keys, x_test_msgs = gen_data(100)
+        # print("AB communication loss: ", alice_and_bob_gan.evaluate([x_test_keys, x_test_msgs], x_test_msgs, verbose=0))
         pickle.dump({
             'alice': alice_losses,
             'eve': eve_losses,
