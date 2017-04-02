@@ -10,7 +10,7 @@ import os
 import os.path
 import keras
 from keras.models import Model, Sequential
-from keras.layers import Dense, Input, Dropout
+from keras.layers import Dense, Input, Dropout, Lambda, AveragePooling2D, GlobalAveragePooling2D, LSTM
 from keras.layers import Reshape
 from keras.layers.core import Activation
 from keras.layers.normalization import BatchNormalization
@@ -29,7 +29,7 @@ import math
 from keras.utils import np_utils
 
 img_shape = img_rows, img_cols, img_depth = 28, 28, 1
-
+number_classes = 10
 
 def generator_model(input_shape, msg_len):
     img = Input(shape=input_shape, name='CoverImage')
@@ -72,48 +72,55 @@ def generator_model(input_shape, msg_len):
 
 def classifier_model(input_shape, msg_len):
     # Bob: Given images reconstructs the secret message
-    model = Sequential()
-    model.add(Conv2D(32,
-                     kernel_size=3,
-                     activation='relu',
-                     input_shape=input_shape))
-    model.add(Conv2D(32, kernel_size=3, activation='relu'))
-    model.add(Conv2D(32, kernel_size=5, activation='relu'))
-    model.add(MaxPooling2D(pool_size=(2, 2)))
-    model.add(Dropout(0.25))
-    model.add(Flatten())
-    model.add(Dense(128, activation='relu'))
-    model.add(Dropout(0.5))
-    model.add(Dense(128, activation='relu'))
-    model.add(Dense(msg_len, activation='tanh'))
+    # And outputs what the image was supposed to be
+
+    img = Input(shape=input_shape, name='StampedImage')
+
+    x = Conv2D(32, kernel_size=3, activation='relu', input_shape=input_shape)(img)
+    x = Conv2D(32, kernel_size=3, activation='relu')(x)
+    x = Conv2D(32, kernel_size=5, activation='relu')(x)
+    x = MaxPooling2D(pool_size=(2, 2))(x)
+    x = Dropout(0.25)(x)
+    x = Flatten()(x)
+    x = Dense(128, activation='relu')(x)
+    x = Dropout(0.5)(x)
+
+    x_mesg_layer = Dense(128, activation='relu')(x)
+    x_class_layer = Dense(128, activation='relu')(x)
+
+    merged_layer = keras.layers.concatenate([x_mesg_layer, x_class_layer])
+
+    x_mesg_out = Dense(msg_len, activation='tanh')(merged_layer)
+    x_class_out = Dense(number_classes, activation='softmax')(merged_layer)
+
+    model = Model(inputs=img, outputs=[x_mesg_out, x_class_out])
     return model
 
 
 def discriminator_model(input_shape):
     # Eve: given images and has to decide if they contain a hidden message or not
     # Optionally could consider ACGAN - output a probability of the class
-    # Could use something designed for this https://github.com/daniellerch/stego_cnn/blob/master/stego_cnn_xu.py#L98
     model = Sequential()
-    model.add(Conv2D(64, kernel_size=5, padding='same', input_shape=input_shape))
-    model.add(Activation('tanh'))
+    model.add(Conv2D(32, kernel_size=3, padding='same', input_shape=input_shape, activation='tanh'))
+    model.add(Conv2D(64, (3, 3), activation='tanh'))
     model.add(MaxPooling2D(pool_size=(2, 2)))
-    model.add(Conv2D(128, kernel_size=5))
-    model.add(Activation('tanh'))
+    #model.add(Dropout(0.25))
+    model.add(Conv2D(128, kernel_size=3, activation='tanh'))
     model.add(MaxPooling2D(pool_size=(2, 2)))
     model.add(Flatten())
-    model.add(Dense(1024))
-    model.add(Activation('tanh'))
+    model.add(Dense(4096, activation='tanh'))
+
+    # Output
     model.add(Dense(1))
     model.add(Activation('sigmoid'))
     return model
-
 
 
 def combine_images(generated_images):
     num = generated_images.shape[0]
     width = int(math.sqrt(num))
     height = int(math.ceil(float(num)/width))
-    shape = (28, 28)
+    shape = generated_images.shape[1:]
     image = np.zeros((height*shape[0], width*shape[1]),
                      dtype=generated_images.dtype)
     for index, img in enumerate(generated_images):
@@ -153,14 +160,13 @@ def train(msg_len, batch_size, epochs, save_epoch_weights, path=''):
     bob = classifier_model(input_shape, msg_len)
     discriminator = discriminator_model(input_shape)
 
-
     # Create the Alice Bob GAN System
     ab_msg_input = Input(shape=(msg_len, ), name='SecretMsg')
     ab_img_input = Input(shape=input_shape, name='OriginalImage')
     ab_inputs = [ab_img_input, ab_msg_input]
     stamped_img = alice(ab_inputs)
-    reconstructed_msg_out = bob(inputs=[stamped_img])
-    alice_and_bob_gan = Model(ab_inputs, reconstructed_msg_out, name='Alice Bob GAN')
+    reconstructed_msg_out, guessed_classes = bob(inputs=[stamped_img])
+    alice_and_bob_gan = Model(ab_inputs, [reconstructed_msg_out, guessed_classes], name='Alice Bob GAN')
 
     # Create the Alice Discriminator GAN System
     ae_msg_input = Input(shape=(msg_len, ), name='SecretMsg')
@@ -171,14 +177,15 @@ def train(msg_len, batch_size, epochs, save_epoch_weights, path=''):
     alice_and_eve_gan = Model(ae_inputs, contains_secret_msg, name='Alice Eve GAN')
 
 
-    # Setup the optimizers and compile the models
-    g_c_optim = Adam(lr=0.0001)
-    g_d_optim = Adam(lr=0.0005)
-    c_optim = Adam()
-    d_optim = Adam()
+    # Setup the optimizers (all defaults) and compile the models
+    g_c_optim = Adam(lr=0.0010)
+    g_d_optim = Adam(lr=0.0010)
+    c_optim =   Adam(lr=0.0010)
+    d_optim =   Adam(lr=0.0010)
 
     alice_and_eve_gan.compile(loss='binary_crossentropy', optimizer=g_d_optim)
-    alice_and_bob_gan.compile(loss='mean_absolute_error', optimizer=g_c_optim)
+    alice_and_bob_gan.compile(loss=['mean_absolute_error', 'categorical_crossentropy'],
+                              optimizer=g_c_optim)
 
     discriminator.compile(loss='binary_crossentropy', optimizer=d_optim)
 
@@ -193,6 +200,10 @@ def train(msg_len, batch_size, epochs, save_epoch_weights, path=''):
         for batch in range(num_batches):
 
             image_batch = x_train[batch * batch_size:(batch + 1) * batch_size]
+            class_batch = y_train[batch * batch_size:(batch + 1) * batch_size]
+            #class_batch = class_batch.reshape((512, 1))
+            class_batch = np_utils.to_categorical(class_batch, number_classes)
+
             msg_batch = gen_bit_data(batch_size, msg_len)
 
             for k in range(1):
@@ -210,16 +221,19 @@ def train(msg_len, batch_size, epochs, save_epoch_weights, path=''):
 
             # This helps give Alice an advantage to learn to correctly generate images
             # before trying to hide information in them.
-            if epoch > 0:
+            if epoch >= 0:
                 # Compute Bob's loss - tasked with reconstruction of the secret.
                 # loss on the generated images
                 bob.trainable = True
-                c_loss = bob.train_on_batch(generated_images, msg_batch)
+                c_loss = bob.train_on_batch(
+                    generated_images,
+                    [msg_batch, class_batch]
+                )
 
                 # Compute Alice's loss on if it could correctly communicate to Bob
                 g_c_loss = alice_and_bob_gan.train_on_batch(
                     [image_batch, msg_batch],
-                    msg_batch
+                    [msg_batch, class_batch]
                 )
 
                 bob.trainable = False
@@ -241,7 +255,7 @@ def train(msg_len, batch_size, epochs, save_epoch_weights, path=''):
 
             discriminator.trainable = True
             if batch % 10 == 0:
-                print("{} Step {}.{:3} Discriminator: {:8.6f} Bob: {:8.6f} Alice2Bob: {:8.6f} Alice fooling Discriminator: {:8.6f}".format(
+                print("{} Step {}.{:3} Discriminator: {:8.6f} Bob: {} Alice2Bob: {} Alice fooling Discriminator: {:8.6f}".format(
                     msg_len, epoch, batch, d_loss, c_loss, g_c_loss, g_d_loss)
                 )
 
@@ -250,16 +264,16 @@ def train(msg_len, batch_size, epochs, save_epoch_weights, path=''):
             bob.save_weights('classifier_{}.h5'.format(epoch), True)
             discriminator.save_weights('discriminator_{}.h5'.format(epoch), True)
 
-        alice.save_weights('generator_{}_bits.h5'.format(msg_len), True)
-        discriminator.save_weights('discriminator_{}_bits.h5'.format(msg_len), True)
+        alice.save_weights('{}/generator_{}_bits.h5'.format(path, msg_len), True)
+        discriminator.save_weights('{}/discriminator_{}_bits.h5'.format(path, msg_len), True)
 
 
 def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ex-name", type=str, help='experiment-name')
     parser.add_argument("--path", type=str, default='.', help="Path to save results")
-    parser.add_argument("--batch-size", type=int, default=1024)
-    parser.add_argument("--epochs", type=int, default=100)
+    parser.add_argument("--batch-size", type=int, default=512)
+    parser.add_argument("--epochs", type=int, default=200)
     parser.add_argument("--save-weights", dest="save_epochs", action='store_true',
                         help="Save weights for each epoch")
     parser.set_defaults(nice=False, save_epochs=False)
@@ -271,8 +285,8 @@ if __name__ == "__main__":
 
     base_path = os.path.abspath(args.path)
 
-    for bits in [4, 8, 16, 32, 64, 80, 100]:
-        path = os.path.join(base_path, 'ex3-{}-bit-results'.format(bits))
+    for bits in [4, 16, 32, 64, 80, 100]:
+        path = os.path.join(base_path, 'ex8-{}-bit-results'.format(bits))
         if not os.path.exists(path): os.mkdir(path)
 
         train(msg_len=bits, batch_size=args.batch_size, epochs=args.epochs, save_epoch_weights=args.save_epochs, path=path)
