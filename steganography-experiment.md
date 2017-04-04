@@ -125,6 +125,36 @@ Try adding an additional output - the image class - to Bob.
 ![Generator](./assets/discriminator.jpg)
 
 
+## Experiment 6
+
+Adjust the loss:
+
+    def alice_eve_loss(y_true, y_pred):
+        """
+        A loss function where the objective is to actually guess half 
+        the predictions correctly.
+        """
+        return K.abs(0.5 - mean_absolute_error(y_pred, y_true))
+
+
+    alice_and_eve_gan.compile(loss=alice_eve_loss, optimizer=g_d_optim)
+
+Running with 2 bit message after just 7 epochs:
+
+    2 Step 7. 60 Discriminator: 0.625770 Bob: [0.2500805, 0.24222082, 0.0078596752] Alice2Bob: [0.39892375, 0.25151759, 0.14740615] Alice fooling Discriminator: 0.040862
+    2 Step 7. 70 Discriminator: 0.699855 Bob: [0.27666435, 0.26946828, 0.0071960706] Alice2Bob: [0.3700515, 0.28367206, 0.086379431] Alice fooling Discriminator: 0.047931
+
+
+## Experiment 7
+
+Remove the classifier from Bob
+
+... Look at losses, add extra Alice loss comparing generated image to cover.
+
+
+## Experiment 11
+
+I think my biggest mistake was using very large batches... It would mean that each system would go too far in one direction.
 
 ## Other Ideas
 
