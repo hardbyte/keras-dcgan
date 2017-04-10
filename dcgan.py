@@ -66,6 +66,7 @@ def classifier_model(input_shape):
                      kernel_size=3,
                      activation='relu',
                      input_shape=input_shape))
+    # TODO check if the filter's kernel_size should be 5 then 3 instead
     model.add(Conv2D(32, kernel_size=3, activation='relu'))
     model.add(Conv2D(32, kernel_size=5, activation='relu'))
     model.add(MaxPooling2D(pool_size=(2, 2)))
@@ -189,7 +190,7 @@ def train(batch_size, epochs, save_epoch_weights, path=''):
             generated_images = generator.predict([noise, classes], verbose=0)
 
             if index % 50 == 0:
-                image = combine_images(generated_images[:25])
+                image = combine_images(generated_images[:16])
                 image = image*127.5+127.5
                 filename = '{}/{}_{}.png'.format(path, epoch, index)
                 Image.fromarray(image.astype(np.uint8)).save(filename)

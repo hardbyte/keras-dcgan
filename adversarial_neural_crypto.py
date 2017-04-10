@@ -46,7 +46,9 @@ batch_size = 1024
 learning_rate = 0.0008
 extra_eve_training_batches = 3
 
-callback = keras.callbacks.TensorBoard(log_dir='./logs', histogram_freq=0, write_graph=False, write_images=False)
+alice_bob_tb = keras.callbacks.TensorBoard(log_dir='./logs', histogram_freq=1, write_graph=True, write_images=False)
+alice_eve_tb = keras.callbacks.TensorBoard(log_dir='./logs', histogram_freq=1, write_graph=True, write_images=False)
+eve_tb = keras.callbacks.TensorBoard(log_dir='./logs', histogram_freq=1, write_graph=True, write_images=False)
 
 
 def common_layers(first_fully_connected_layer, name='unknown'):
@@ -176,7 +178,7 @@ def train(batch_size, epochs, path=''):
         If y_pred is close to y_true, or close to the opposite of y_true
         then the loss should be high.
 
-        The optimal loss is half the bits match.
+        The optimal loss for alice (ie loss=0) is when half the bits match.
         """
 
         return K.abs(K.mean(K.abs(y_pred - y_true), axis=-1) - 1)
@@ -191,12 +193,18 @@ def train(batch_size, epochs, path=''):
     eve_gan.compile(loss=alice_eve_loss, optimizer=Adam(lr=learning_rate))
     update_alice_and_bob_gan()
 
+    alice_bob_tb.set_model(alice_and_bob_gan)
+    alice_eve_tb.set_model(eve_gan)
+    eve_tb.set_model(eve)
+
     alice_losses = []
     combined_losses = []
     eve_losses = []
 
     for epoch in range(epochs):
         print('epoch {}'.format(epoch))
+        alice_bob_tb.on_epoch_begin(epoch)
+
         for index in range(1000):
             x_train_keys, x_train_msgs = gen_data(batch_size)
 
@@ -205,25 +213,21 @@ def train(batch_size, epochs, path=''):
 
             alice.trainable = True
             bob.trainable = True
-            alice_and_bob_gan.fit(
+            a_loss = alice_and_bob_gan.train_on_batch(
                 [x_train_keys, x_train_msgs],
-                x_train_msgs,
-                callbacks=[callback],
-                verbose=0, initial_epoch=epoch
+                x_train_msgs
             )
 
-            a_loss = alice_and_bob_gan.evaluate([x_train_keys, x_train_msgs], x_train_msgs, verbose=0)
-
+            alice_bob_tb.on_epoch_end(index + 1000*epoch, {'alice bob loss': a_loss})
             alice_losses.append((time.time(), a_loss))
 
             # Not too much point training eve until alice and bob are communicating
-            if a_loss < 0.1:
+            if a_loss < 0.2:
                 generated_coms = alice.predict([x_train_keys, x_train_msgs])
 
                 # Train eve by trying to reconstruct the comms
                 eve.trainable = True
                 e_loss = eve.train_on_batch([generated_coms], x_train_msgs)
-
                 eve.trainable = False
 
                 # # Train bob to try reconstruct the comms
@@ -238,6 +242,7 @@ def train(batch_size, epochs, path=''):
                 eve.trainable = False
 
                 a_loss_against_eve = eve_gan.train_on_batch([x_train_keys, x_train_msgs], x_train_msgs)
+                alice_eve_tb.on_epoch_end(index + 1000*epoch, {'alice eve loss': a_loss_against_eve})
                 combined_losses.append((time.time(), a_loss_against_eve))
 
                 # # Give Eve an advantage by allowing extra training against the model
@@ -247,6 +252,8 @@ def train(batch_size, epochs, path=''):
                     x_train_keys, x_train_msgs = gen_data(batch_size)
                     generated_coms = alice.predict([x_train_keys, x_train_msgs])
                     e_loss = eve.train_on_batch([generated_coms], x_train_msgs)
+
+                eve_tb.on_epoch_end(index + 1000*epoch, {'eve loss': e_loss})
                 eve_losses.append((time.time(), e_loss))
 
                 update_alice_and_bob_gan(e_loss)
@@ -254,7 +261,9 @@ def train(batch_size, epochs, path=''):
                 if index % 50 == 0:
                     print(a_loss, a_loss_against_eve, e_loss)
             else:
-                print(a_loss)
+                if index % 100 == 0:
+                    print(a_loss)
+
 
         # x_test_keys, x_test_msgs = gen_data(100)
         # print("AB communication loss: ", alice_and_bob_gan.evaluate([x_test_keys, x_test_msgs], x_test_msgs, verbose=0))
