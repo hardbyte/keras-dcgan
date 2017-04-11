@@ -71,7 +71,7 @@ def generator_model(input_shape, msg_len, key_len):
     # Mix the image and message
 
     x = keras.layers.concatenate([key_3, msg_3, img_l2])
-    img_l3 = Conv2D(3,
+    mix_l1 = Conv2D(256,  # TODO ?
            kernel_size=1,
            padding='same',
            #activation='tanh',# Leave off
@@ -79,7 +79,7 @@ def generator_model(input_shape, msg_len, key_len):
 
     # Seems like there could do with some layers here... ?
 
-    out = Conv2D(1, kernel_size=1, padding='same', activation='tanh')(img_l3)
+    out = Conv2D(1, kernel_size=1, padding='same', activation='tanh')(mix_l1)
 
     model = Model(inputs=[img, msg, key], outputs=out)
 
@@ -109,7 +109,7 @@ def classifier_model(input_shape, msg_len, key_len):
     x = Dropout(0.25)(x)
     x = Flatten()(x)
     x = Dense(128, activation='relu')(x)
-    x = Dropout(0.5)(x)
+    x = Dropout(0.25)(x)
 
     x_mesg_layer = Dense(128, activation='relu')(x)
     x_class_layer = Dense(128, activation='relu')(x)
@@ -134,7 +134,7 @@ def discriminator_model(input_shape):
     model.add(Conv2D(128, kernel_size=3, activation='tanh'))
     model.add(MaxPooling2D(pool_size=(2, 2)))
     model.add(Flatten())
-    model.add(Dense(4096, activation='tanh'))
+    model.add(Dense(128, activation='tanh'))
 
     # Output
     model.add(Dense(1))
@@ -199,7 +199,7 @@ def create_model(input_shape, msg_len, batch_size, save_epoch_weights, path='',
     g_d_optim = Adam(lr=0.0002)
     g_optim =   Adam(lr=0.0002)
     c_optim =   Adam(lr=0.0002)
-    d_optim =   Adam(lr=0.0002)
+    d_optim =   Adam(lr=0.0001)
 
     def alice_loss(y_true, y_pred):
         return alice_cover_diff_weight * mean_absolute_error(y_true, y_pred)
@@ -294,7 +294,7 @@ def create_model(input_shape, msg_len, batch_size, save_epoch_weights, path='',
 
                         c_loss = bob.evaluate([generated_images, key_batch], [msg_batch], verbose=0)
 
-                    if batch % 50 == 0:
+                    if batch % 500 == 0:
                         image = combine_images(np.concatenate((generated_images[:2], image_batch[:2])))
                         image = image*127.5+127.5
                         filename = '{}/{}bits_e{}-s{}.png'.format(path, msg_len, epoch, batch)
@@ -315,8 +315,8 @@ def create_model(input_shape, msg_len, batch_size, save_epoch_weights, path='',
                     )
 
                     discriminator.trainable = True
-                    if batch % 100 == 0 and verbose:
-                        with open('{}/res.txt'.format(path), 'wt') as f:
+                    if batch % 100 == 0:
+                        with open('{}/res.txt'.format(path), 'at') as f:
                             print("{} Step {}.{:3} Discriminator: {:8.6f} Bob: {:8.6f} Alice2Bob: {:8.6f} Alice fooling Discriminator: {:8.6f} Alice Cover Diff: {:8.6f}".format(
                                 msg_len, epoch, batch, d_loss, c_loss, g_c_loss, g_d_loss, a_diff_loss),
                                 file=f
@@ -329,7 +329,10 @@ def create_model(input_shape, msg_len, batch_size, save_epoch_weights, path='',
                     discriminator.save_weights('discriminator_{}.h5'.format(epoch), True)
 
                 alice.save_weights('{}/generator_{}_bits.h5'.format(path, msg_len), True)
+                bob.save_weights('{}/classifier_{}_bits.h5'.format(path, msg_len), True)
                 discriminator.save_weights('{}/discriminator_{}_bits.h5'.format(path, msg_len), True)
+                print("Epoch {} -".format(epoch), end=' ')
+                self.evaluate(image_batch)
 
         def evaluate(self, x, y=None, batch_size=32, verbose=1):
             image_batch = x[:batch_size]
@@ -366,7 +369,7 @@ def get_args():
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--save-weights", dest="save_epochs", action='store_true',
                         help="Save weights for each epoch")
-    parser.set_defaults(nice=False, save_epochs=False)
+    parser.set_defaults(nice=False, save_epochs=True)
     return parser.parse_args()
 
 
@@ -375,9 +378,9 @@ if __name__ == "__main__":
 
     base_path = os.path.abspath(args.path)
 
-    bits = 16
+    bits = 10
 
-    path = os.path.join(base_path, 'steg-key-ex0-{}-bit-results'.format(bits))
+    path = os.path.join(base_path, 'steg-key-ex3-{}-bit-results'.format(bits))
     if not os.path.exists(path): os.mkdir(path)
 
     (x_train, y_train), (x_test, y_test) = mnist.load_data()
@@ -396,7 +399,7 @@ if __name__ == "__main__":
 
     x_train = (x_train.astype(np.float32) - 127.5)/127.5
 
-    def make_model(alice_weight_bob):
+    def make_model(alice_weight_bob,alice_weight_eve, alice_cover_diff_weight):
         print('New model:', alice_weight_bob)
         model = create_model(
             input_shape,
@@ -404,11 +407,13 @@ if __name__ == "__main__":
             batch_size=args.batch_size,
             save_epoch_weights=args.save_epochs,
             path=path,
-            alice_weight_bob=alice_weight_bob
+            alice_weight_bob=alice_weight_bob,
+            alice_weight_eve=alice_weight_eve,
+            alice_cover_diff_weight=alice_cover_diff_weight
         )
         return model
 
-    model = make_model(1.0)
+    model = make_model(5.0, 0.5, 0.5)
     start = time.time()
     model.fit(x_train, y=y_train, epochs=args.epochs, verbose=0)
     print(time.time() - start)
