@@ -29,10 +29,19 @@ from PIL import Image
 import argparse
 import math
 
-# input image dimensions
+from matplotlib import pylab
+
+from tbcallback import TensorBoardGAN
 from keras.utils import np_utils
 from keras.wrappers.scikit_learn import KerasClassifier
 from sklearn.model_selection import GridSearchCV
+
+tensorboard_callback = TensorBoardGAN(
+    log_dir='/tmp/ganlogs',
+    histogram_freq=0,
+    write_graph=False,
+    write_images=False
+)
 
 img_shape = img_rows, img_cols, img_depth = 28, 28, 1
 number_classes = 10
@@ -108,7 +117,7 @@ def classifier_model(input_shape, msg_len, key_len):
     x = MaxPooling2D(pool_size=(2, 2))(x)
     x = Dropout(0.25)(x)
     x = Flatten()(x)
-    x = Dense(128, activation='relu')(x)
+    x = Dense(256, activation='relu')(x)
     x = Dropout(0.25)(x)
 
     x_mesg_layer = Dense(128, activation='relu')(x)
@@ -142,14 +151,30 @@ def discriminator_model(input_shape):
     return model
 
 
-def combine_images(generated_images):
-    num = generated_images.shape[0]
-    width = int(math.sqrt(num))
+def output_sample_images(alice, validation_data, filename):
+    batch_size = 10
+    x, y = validation_data
+    img_batch = np.array([
+        x[y == i][0] for i in range(10)
+    ], dtype=x.dtype)
+
+    msg_batch = gen_bit_data(batch_size, alice.inputs[1].shape[-1].value)
+    key_batch = gen_bit_data(batch_size, alice.inputs[2].shape[-1].value)
+    generated_images = alice.predict([img_batch, msg_batch, key_batch])
+
+    all_images = np.concatenate((
+        img_batch * 127.5 + 127.5,
+        generated_images * 127.5 + 127.5,
+        ((img_batch - generated_images) * 127.5 + 127.5)/2,
+        ))
+
+    num = all_images.shape[0]
+    width = 10
     height = int(math.ceil(float(num)/width))
-    shape = generated_images.shape[1:]
+    shape = all_images.shape[1:]
     image = np.zeros((height*shape[0], width*shape[1]),
-                     dtype=generated_images.dtype)
-    for index, img in enumerate(generated_images):
+                     dtype=np.uint8)
+    for index, img in enumerate(all_images):
         i = int(index/width)
         j = index % width
         if K.image_data_format() == 'channels_first':
@@ -158,7 +183,8 @@ def combine_images(generated_images):
         else:
             image[i*shape[0]:(i+1)*shape[0], j*shape[1]:(j+1)*shape[1]] = \
                 img[:, :, 0]
-    return image
+
+    Image.fromarray(image).save(filename)
 
 
 def gen_bit_data(samples, msg_len):
@@ -195,10 +221,10 @@ def create_model(input_shape, msg_len, batch_size, save_epoch_weights, path='',
     alice_and_eve_gan = Model(ae_inputs, contains_secret_msg, name='Alice Eve GAN')
 
     # Setup the optimizers and compile the models
-    g_c_optim = Adam(lr=0.0002)
+    g_c_optim = Adam(lr=0.0010)
     g_d_optim = Adam(lr=0.0002)
-    g_optim =   Adam(lr=0.0002)
-    c_optim =   Adam(lr=0.0002)
+    g_optim =   Adam(lr=0.0005)
+    c_optim =   Adam(lr=0.0005)
     d_optim =   Adam(lr=0.0001)
 
     def alice_loss(y_true, y_pred):
@@ -229,6 +255,10 @@ def create_model(input_shape, msg_len, batch_size, save_epoch_weights, path='',
     bob.trainable = True
     bob.compile(loss=mean_absolute_error, optimizer=c_optim)
 
+    # Set callbacks
+    tensorboard_callback.set_model(alice_and_bob_gan)
+    #alice_eve_tb.set_model(alice_and_eve_gan)
+
     class GanModel:
 
         metrics_names = ['acc']
@@ -248,7 +278,7 @@ def create_model(input_shape, msg_len, batch_size, save_epoch_weights, path='',
                 class_weight=None,
                 sample_weight=None,
                 initial_epoch=0):
-
+            epoch_acc = 0
             print("{} batches per epoch".format(x_train.shape[0] // batch_size))
             for epoch in range(epochs):
                 num_batches = int(x.shape[0]/batch_size)
@@ -294,12 +324,6 @@ def create_model(input_shape, msg_len, batch_size, save_epoch_weights, path='',
 
                         c_loss = bob.evaluate([generated_images, key_batch], [msg_batch], verbose=0)
 
-                    if batch % 500 == 0:
-                        image = combine_images(np.concatenate((generated_images[:2], image_batch[:2])))
-                        image = image*127.5+127.5
-                        filename = '{}/{}bits_e{}-s{}.png'.format(path, msg_len, epoch, batch)
-                        Image.fromarray(image.astype(np.uint8)).save(filename)
-
                     # Compute Alice's loss on how similar the image is to the cover
                     a_diff_loss = alice.train_on_batch(
                             [image_batch, msg_batch, key_batch],
@@ -315,36 +339,51 @@ def create_model(input_shape, msg_len, batch_size, save_epoch_weights, path='',
                     )
 
                     discriminator.trainable = True
-                    if batch % 100 == 0:
-                        with open('{}/res.txt'.format(path), 'at') as f:
+                    if batch % 500 == 0:
+                        self.evaluate(validation_data[0][:min(100, len(validation_data[0]))])
+                        with open('{}/logs.txt'.format(path), 'at') as f:
                             print("{} Step {}.{:3} Discriminator: {:8.6f} Bob: {:8.6f} Alice2Bob: {:8.6f} Alice fooling Discriminator: {:8.6f} Alice Cover Diff: {:8.6f}".format(
                                 msg_len, epoch, batch, d_loss, c_loss, g_c_loss, g_d_loss, a_diff_loss),
                                 file=f
                             )
 
+                        tensorboard_callback.on_epoch_end(batch + epoch * num_batches, {
+                            'gc-loss': g_c_loss,
+                            'gd-loss': g_d_loss,
+                            'd-loss': d_loss,
+                            'c-loss': c_loss,
+                            'gen vs cover loss': a_diff_loss,
+                            'accuracy': epoch_acc
+
+                        })
+
                 #self.loss = [d_loss, c_loss, g_c_loss, g_d_loss, a_diff_loss]
                 if save_epoch_weights:
-                    alice.save_weights('generator_{}.h5'.format(epoch), True)
-                    bob.save_weights('classifier_{}.h5'.format(epoch), True)
-                    discriminator.save_weights('discriminator_{}.h5'.format(epoch), True)
+                    alice.save_weights('{}/generator_{}.h5'.format(path, epoch), True)
+                    bob.save_weights('{}/classifier_{}.h5'.format(path, epoch), True)
+                    discriminator.save_weights('{}/discriminator_{}.h5'.format(path, epoch), True)
 
                 alice.save_weights('{}/generator_{}_bits.h5'.format(path, msg_len), True)
                 bob.save_weights('{}/classifier_{}_bits.h5'.format(path, msg_len), True)
                 discriminator.save_weights('{}/discriminator_{}_bits.h5'.format(path, msg_len), True)
                 print("Epoch {} -".format(epoch), end=' ')
-                self.evaluate(image_batch)
+                epoch_acc = self.evaluate(validation_data[0][:min(1000, len(validation_data[0]))])
 
-        def evaluate(self, x, y=None, batch_size=32, verbose=1):
-            image_batch = x[:batch_size]
+                filename = '{}/epoch-{}-transfer-accuracy-{}.png'.format(path, epoch, int(epoch_acc))
+                output_sample_images(alice, validation_data, filename)
+
+        def evaluate(self, x, y=None, batch_size=32, verbose=0):
+            image_batch = x
             msg_batch = gen_bit_data(len(x), msg_len)
             key_batch = gen_bit_data(len(x), key_len)
             generated_images = alice.predict([image_batch, msg_batch, key_batch], verbose=0)
 
             X_img = np.concatenate((image_batch, generated_images))
-            y = [0] * batch_size + [1] * batch_size
+            y = [0] * len(image_batch) + [1] * len(generated_images)
             d_loss = discriminator.evaluate(X_img, y, verbose=verbose)
 
-            print("Discriminator loss: {}".format(d_loss))
+            if verbose > 0:
+                print("Discriminator loss: {}".format(d_loss))
 
             received_messages = alice_and_bob_gan.predict(
                 [image_batch, msg_batch, key_batch],
@@ -356,7 +395,7 @@ def create_model(input_shape, msg_len, batch_size, save_epoch_weights, path='',
                     msgs_transfered += 1
 
             print("Correctly transfered {} messages out of {}".format(msgs_transfered, len(msg_batch)))
-            return 100 * msgs_transfered / len(msg_batch)
+            return 100.0 * msgs_transfered / len(msg_batch)
 
     return GanModel()
 
@@ -365,7 +404,7 @@ def get_args():
     parser = argparse.ArgumentParser()
     parser.add_argument("--ex-name", type=str, help='experiment-name')
     parser.add_argument("--path", type=str, default='.', help="Path to save results")
-    parser.add_argument("--batch-size", type=int, default=32)
+    parser.add_argument("--batch-size", type=int, default=64)
     parser.add_argument("--epochs", type=int, default=100)
     parser.add_argument("--save-weights", dest="save_epochs", action='store_true',
                         help="Save weights for each epoch")
@@ -380,7 +419,7 @@ if __name__ == "__main__":
 
     bits = 10
 
-    path = os.path.join(base_path, 'steg-key-ex3-{}-bit-results'.format(bits))
+    path = os.path.join(base_path, 'steg-key-ex5-{}-bit-results'.format(bits))
     if not os.path.exists(path): os.mkdir(path)
 
     (x_train, y_train), (x_test, y_test) = mnist.load_data()
@@ -398,8 +437,9 @@ if __name__ == "__main__":
         input_shape = (img_rows, img_cols, img_depth)
 
     x_train = (x_train.astype(np.float32) - 127.5)/127.5
+    x_test = (x_test.astype(np.float32) - 127.5)/127.5
 
-    def make_model(alice_weight_bob,alice_weight_eve, alice_cover_diff_weight):
+    def make_model(alice_weight_bob, alice_weight_eve, alice_cover_diff_weight):
         print('New model:', alice_weight_bob)
         model = create_model(
             input_shape,
@@ -413,9 +453,9 @@ if __name__ == "__main__":
         )
         return model
 
-    model = make_model(5.0, 0.5, 0.5)
+    model = make_model(1.0, 0.5, 0.5)
     start = time.time()
-    model.fit(x_train, y=y_train, epochs=args.epochs, verbose=0)
+    model.fit(x_train, y=y_train, epochs=args.epochs, verbose=0, validation_data=(x_test, y_test))
     print(time.time() - start)
 
     print(model.evaluate(x_test, verbose=0))
